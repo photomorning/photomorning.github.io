@@ -177,13 +177,19 @@ async function generateBaseArticles() {
 async function collectReleasedFiles() {
   if (!(await pathExists(releaseDir))) {
     await fs.mkdir(releaseDir, { recursive: true });
-    return [];
   }
 
-  const entries = await fs.readdir(releaseDir, { withFileTypes: true });
-  return entries
+  const releasedEntries = (await pathExists(releaseDir))
+    ? await fs.readdir(releaseDir, { withFileTypes: true })
+    : [];
+  const releasedFiles = releasedEntries
     .filter((entry) => entry.isFile() && [".md", ".html"].includes(path.extname(entry.name).toLowerCase()))
     .map((entry) => path.join(releaseDir, entry.name));
+  const articleDrafts = (await fs.readdir(articleDir, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && path.extname(entry.name).toLowerCase() === ".md")
+    .map((entry) => path.join(articleDir, entry.name));
+
+  return [...releasedFiles, ...articleDrafts];
 }
 
 async function readPublishedReleases() {
@@ -1062,6 +1068,17 @@ async function clearReleasedDirectory() {
   return entries.length;
 }
 
+async function clearArticleDraftFiles(files) {
+  const resolvedArticleDir = path.resolve(articleDir);
+  const draftFiles = files.filter((file) => {
+    const resolvedFile = path.resolve(file);
+    return resolvedFile.startsWith(`${resolvedArticleDir}${path.sep}`) && path.extname(resolvedFile).toLowerCase() === ".md";
+  });
+
+  await Promise.all(draftFiles.map((file) => fs.rm(file, { force: true })));
+  return draftFiles.length;
+}
+
 async function localizeExternalImages() {
   const htmlFiles = [
     ...rootPages.map((file) => path.join(root, file)),
@@ -1120,10 +1137,11 @@ async function main() {
   const normalizedHomeLinks = await normalizeHomeLinks();
   const seoPages = await applySeoMetadata();
   const sitemapUrls = await writeSearchIndexFiles();
+  const clearedReleasedItems = await clearReleasedDirectory();
+  const clearedArticleDrafts = await clearArticleDraftFiles(releasedResult.releaseFiles);
   await rebuildDeployDir();
   await createZip();
-  const clearedReleasedItems = await clearReleasedDirectory();
-  console.log(`Built PhotoMorning with asset version ${version}. Released articles synced: ${releasedResult.newArticles.length}. Published released articles: ${refreshedReleaseImages.articles.length}. Adorama ad pages updated: ${adPages}. Release thumbnails refreshed: ${refreshedReleaseImages.updated}. Latest feed items: ${latestFeedItems}. Featured guide items: ${featuredGuideItems}. Home links normalized: ${normalizedHomeLinks}. SEO pages updated: ${seoPages}. Sitemap URLs: ${sitemapUrls}. Released items cleared: ${clearedReleasedItems}. External images localized: ${imageResult.localized}. Local images converted to AVIF: ${localImageResult.converted}. Failed: ${imageResult.failed}.`);
+  console.log(`Built PhotoMorning with asset version ${version}. Released articles synced: ${releasedResult.newArticles.length}. Published released articles: ${refreshedReleaseImages.articles.length}. Adorama ad pages updated: ${adPages}. Release thumbnails refreshed: ${refreshedReleaseImages.updated}. Latest feed items: ${latestFeedItems}. Featured guide items: ${featuredGuideItems}. Home links normalized: ${normalizedHomeLinks}. SEO pages updated: ${seoPages}. Sitemap URLs: ${sitemapUrls}. Released items cleared: ${clearedReleasedItems}. Article drafts cleared: ${clearedArticleDrafts}. External images localized: ${imageResult.localized}. Local images converted to AVIF: ${localImageResult.converted}. Failed: ${imageResult.failed}.`);
 }
 
 main().catch((error) => {
