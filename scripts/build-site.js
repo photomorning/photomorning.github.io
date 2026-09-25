@@ -265,8 +265,67 @@ function markdownToArticle(source, fallbackTitle) {
 
 function inlineMarkdown(value) {
   return escapeHtml(value)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2">$1</a>')
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+}
+
+function normalizeTextArtifacts(value) {
+  return String(value || "")
+    .replace(/鈥\?/g, "—")
+    .replace(/â€”/g, "—")
+    .replace(/â€“/g, "–")
+    .replace(/â€™/g, "'")
+    .replace(/â€œ/g, '"')
+    .replace(/â€/g, '"');
+}
+
+function linkifyMarkdownLinks(html) {
+  return html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_match, text, url) => {
+    const local = url.startsWith(siteUrl);
+    const href = local ? url.replace(siteUrl, "../") : url;
+    const rel = local ? "" : ' target="_blank" rel="noopener nofollow"';
+    return `<a href="${escapeAttribute(href)}"${rel}>${escapeHtml(text)}</a>`;
+  });
+}
+
+function normalizeArticleInternalLinks(html) {
+  return html
+    .replace(/href="\.\.\/articles\/([^"]+)"/g, 'href="$1"')
+    .replace(/href="https:\/\/photomorning\.com\/articles\/([^"]+)"/g, 'href="$1"')
+    .replace(/href="https:\/\/photomorning\.com\/"/g, 'href="/"');
+}
+
+function mergePhotoAttributions(html) {
+  const attributionPattern = /(<figure>\s*<img\b[\s\S]*?\/>\s*<figcaption>)([\s\S]*?)(<\/figcaption>\s*<\/figure>)\s*<p><em>Photo:\s*\[([^\]]+)\]\((https?:\/\/[^)]+)\)\s*(?:—|–|-)\s*([\s\S]*?)<\/em><\/p>/g;
+  return html.replace(attributionPattern, (_match, open, caption, close, creditName, creditUrl, licenseText) => {
+    const cleanCaption = stripTags(normalizeTextArtifacts(caption)).replace(/\.$/, "");
+    const cleanLicense = stripTags(normalizeTextArtifacts(licenseText)).replace(/\.$/, "");
+    const credit = ` Photo: <a href="${escapeAttribute(creditUrl)}" target="_blank" rel="noopener nofollow">${escapeHtml(stripTags(creditName))}</a> — ${escapeHtml(cleanLicense)}.`;
+    return `${open}${escapeHtml(cleanCaption)}.${credit}${close}`;
+  });
+}
+
+async function cleanArticleAttributions() {
+  const articleFiles = (await fs.readdir(articleDir))
+    .filter((file) => file.endsWith(".html"))
+    .map((file) => path.join(articleDir, file));
+  let updated = 0;
+
+  for (const filePath of articleFiles) {
+    const before = await fs.readFile(filePath, "utf8");
+    let html = normalizeTextArtifacts(before);
+    html = mergePhotoAttributions(html);
+    html = html.replace(/(<div class="article-content">)([\s\S]*?)(<\/div>\s*<\/article>)/, (_match, open, content, close) => {
+      return `${open}${normalizeArticleInternalLinks(linkifyMarkdownLinks(content))}${close}`;
+    });
+    if (html !== before) {
+      updated += 1;
+      await fs.writeFile(filePath, html, "utf8");
+    }
+  }
+
+  return updated;
 }
 
 function renderReleasedArticle(article) {
@@ -1130,6 +1189,7 @@ async function main() {
   await updateArticleRelatedLists();
   const adPages = await insertAdoramaAds();
   const imageResult = await localizeExternalImages();
+  const cleanedAttributionPages = await cleanArticleAttributions();
   const localImageResult = await convertLocalImageAssets();
   const refreshedReleaseImages = await refreshPublishedReleaseImages();
   const latestFeedItems = await updateLatestFeed(refreshedReleaseImages.articles);
@@ -1141,7 +1201,7 @@ async function main() {
   const clearedArticleDrafts = await clearArticleDraftFiles(releasedResult.releaseFiles);
   await rebuildDeployDir();
   await createZip();
-  console.log(`Built PhotoMorning with asset version ${version}. Released articles synced: ${releasedResult.newArticles.length}. Published released articles: ${refreshedReleaseImages.articles.length}. Adorama ad pages updated: ${adPages}. Release thumbnails refreshed: ${refreshedReleaseImages.updated}. Latest feed items: ${latestFeedItems}. Featured guide items: ${featuredGuideItems}. Home links normalized: ${normalizedHomeLinks}. SEO pages updated: ${seoPages}. Sitemap URLs: ${sitemapUrls}. Released items cleared: ${clearedReleasedItems}. Article drafts cleared: ${clearedArticleDrafts}. External images localized: ${imageResult.localized}. Local images converted to AVIF: ${localImageResult.converted}. Failed: ${imageResult.failed}.`);
+  console.log(`Built PhotoMorning with asset version ${version}. Released articles synced: ${releasedResult.newArticles.length}. Published released articles: ${refreshedReleaseImages.articles.length}. Adorama ad pages updated: ${adPages}. Attribution pages cleaned: ${cleanedAttributionPages}. Release thumbnails refreshed: ${refreshedReleaseImages.updated}. Latest feed items: ${latestFeedItems}. Featured guide items: ${featuredGuideItems}. Home links normalized: ${normalizedHomeLinks}. SEO pages updated: ${seoPages}. Sitemap URLs: ${sitemapUrls}. Released items cleared: ${clearedReleasedItems}. Article drafts cleared: ${clearedArticleDrafts}. External images localized: ${imageResult.localized}. Local images converted to AVIF: ${localImageResult.converted}. Failed: ${imageResult.failed}.`);
 }
 
 main().catch((error) => {
